@@ -1,218 +1,223 @@
+require('dotenv').config();
 const express = require('express');
-const app = express();
-
-// Middleware to parse JSON data from requests
-app.use(express.json());
-// Add this line to serve static files (HTML, CSS, JS)
-app.use(express.static('public'));
-
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const cors = require('cors');
+
+const app = express();
 app.use(cors());
+app.use(express.json());
 
 // ============================================
-// IN-MEMORY DATABASE (Array of users)
+// IN-MEMORY DATABASE
 // ============================================
 let users = [
-    { id: 1, name: 'Alice', email: 'alice@example.com', age: 25 },
-    { id: 2, name: 'Bob', email: 'bob@example.com', age: 30 }
+    { id: 1, name: 'Alice', email: 'alice@example.com', password: '$2a$10$abcdefghijklmnopqrstuv', age: 25 },
+    { id: 2, name: 'Bob', email: 'bob@example.com', password: '$2a$10$abcdefghijklmnopqrstuv', age: 30 }
 ];
 
-// ============================================
-// ROUTES
-// ============================================
+// JWT Secret from .env
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
-// Home Route
-app.get('/', (req, res) => {
-    res.json({
-        message: 'Welcome to User Management API!',
-        endpoints: {
-            getAllUsers: 'GET /api/users',
-            getUserById: 'GET /api/users/:id',
-            createUser: 'POST /api/users',
-            updateUser: 'PUT /api/users/:id',
-            deleteUser: 'DELETE /api/users/:id'
+// ============================================
+// MIDDLEWARE: Verify JWT Token
+// ============================================
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+    if (!token) {
+        return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(403).json({ success: false, message: 'Invalid or expired token.' });
         }
+        req.user = decoded; // { userId, email }
+        next();
     });
-});
+}
 
-// --------------------------------------------
-// 1. CREATE - Add a new user (POST)
-// --------------------------------------------
-app.post('/api/users', (req, res) => {
+// ============================================
+// AUTH ROUTES
+// ============================================
+
+// SIGNUP
+app.post('/api/auth/signup', async (req, res) => {
     try {
-        const { name, email, age } = req.body;
+        const { name, email, password, age } = req.body;
 
-        // Validation
-        if (!name || !email || !age) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please provide name, email, and age'
-            });
+        if (!name || !email || !password || !age) {
+            return res.status(400).json({ success: false, message: 'All fields are required' });
         }
 
-        // Create new user
+        // Check if user already exists
+        const existingUser = users.find(u => u.email === email);
+        if (existingUser) {
+            return res.status(400).json({ success: false, message: 'User already exists' });
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create user
         const newUser = {
             id: users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1,
             name,
             email,
-            age
+            password: hashedPassword,
+            age: parseInt(age)
         };
 
         users.push(newUser);
 
+        // Generate token
+        const token = jwt.sign({ userId: newUser.id, email: newUser.email }, JWT_SECRET, { expiresIn: '24h' });
+
         res.status(201).json({
             success: true,
-            message: 'User created successfully',
-            data: newUser
+            message: 'User registered successfully',
+            token,
+            user: { id: newUser.id, name: newUser.name, email: newUser.email, age: newUser.age }
         });
 
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 });
 
-// --------------------------------------------
-// 2. READ - Get all users (GET)
-// --------------------------------------------
-app.get('/api/users', (req, res) => {
+// LOGIN
+app.post('/api/auth/login', async (req, res) => {
     try {
-        res.status(200).json({
-            success: true,
-            count: users.length,
-            data: users
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
-});
+        const { email, password } = req.body;
 
-// --------------------------------------------
-// 3. READ - Get single user by ID (GET)
-// --------------------------------------------
-app.get('/api/users/:id', (req, res) => {
-    try {
-        const userId = parseInt(req.params.id);
-        const user = users.find(u => u.id === userId);
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: 'Email and password required' });
+        }
 
+        // Find user
+        const user = users.find(u => u.email === email);
         if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: `User with ID ${userId} not found`
-            });
+            return res.status(401).json({ success: false, message: 'Invalid credentials' });
         }
+
+        // Compare password
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+
+        // Generate token
+        const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
 
         res.status(200).json({
             success: true,
-            data: user
+            message: 'Login successful',
+            token,
+            user: { id: user.id, name: user.name, email: user.email, age: user.age }
         });
 
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 });
 
-// --------------------------------------------
-// 4. UPDATE - Update user by ID (PUT)
-// --------------------------------------------
-app.put('/api/users/:id', (req, res) => {
-    try {
-        const userId = parseInt(req.params.id);
-        const { name, email, age } = req.body;
-
-        const userIndex = users.findIndex(u => u.id === userId);
-
-        if (userIndex === -1) {
-            return res.status(404).json({
-                success: false,
-                message: `User with ID ${userId} not found`
-            });
-        }
-
-        // Update only provided fields
-        if (name) users[userIndex].name = name;
-        if (email) users[userIndex].email = email;
-        if (age) users[userIndex].age = age;
-
-        res.status(200).json({
-            success: true,
-            message: 'User updated successfully',
-            data: users[userIndex]
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
+// GET all users (protected)
+app.get('/api/users', authenticateToken, (req, res) => {
+    res.json({ success: true, data: users });
 });
 
-// --------------------------------------------
-// 5. DELETE - Delete user by ID (DELETE)
-// --------------------------------------------
-app.delete('/api/users/:id', (req, res) => {
-    try {
-        const userId = parseInt(req.params.id);
-        const userIndex = users.findIndex(u => u.id === userId);
-
-        if (userIndex === -1) {
-            return res.status(404).json({
-                success: false,
-                message: `User with ID ${userId} not found`
-            });
-        }
-
-        const deletedUser = users.splice(userIndex, 1);
-
-        res.status(200).json({
-            success: true,
-            message: 'User deleted successfully',
-            data: deletedUser[0]
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+// GET CURRENT USER (Protected)
+app.get('/api/auth/me', authenticateToken, (req, res) => {
+    const user = users.find(u => u.id === req.user.userId);
+    if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
     }
-});
-
-// ============================================
-// ERROR HANDLING - 404 Route Not Found
-// ============================================
-app.use((req, res) => {
-    res.status(404).json({
-        success: false,
-        message: 'Route not found'
+    res.json({
+        success: true,
+        user: { id: user.id, name: user.name, email: user.email, age: user.age }
     });
 });
 
 // ============================================
-// START SERVER
+// USER CRUD ROUTES (Protected)
 // ============================================
-const PORT = process.env.PORT || 3000;
 
+// CREATE user (protected)
+app.post('/api/users', authenticateToken, (req, res) => {
+    try {
+        const { name, email, age } = req.body;
+        if (!name || !email || !age) {
+            return res.status(400).json({ success: false, message: 'Please provide name, email, and age' });
+        }
+
+        const newUser = {
+            id: users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1,
+            name,
+            email,
+            password: '$2a$10$placeholder',
+            age: parseInt(age)
+        };
+
+        users.push(newUser);
+        res.status(201).json({ success: true, message: 'User created', data: newUser });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    }
+});
+
+// GET all users (protected)
+app.get('/api/users', authenticateToken, (req, res) => {
+    const safeUsers = users.map(({ password, ...u }) => u);
+    res.status(200).json({ success: true, count: safeUsers.length, data: safeUsers });
+});
+
+// GET single user (protected)
+app.get('/api/users/:id', authenticateToken, (req, res) => {
+    const user = users.find(u => u.id === parseInt(req.params.id));
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    const { password, ...safeUser } = user;
+    res.status(200).json({ success: true, data: safeUser });
+});
+
+// UPDATE user (protected)
+app.put('/api/users/:id', authenticateToken, (req, res) => {
+    const userIndex = users.findIndex(u => u.id === parseInt(req.params.id));
+    if (userIndex === -1) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const { name, email, age } = req.body;
+    if (name) users[userIndex].name = name;
+    if (email) users[userIndex].email = email;
+    if (age) users[userIndex].age = parseInt(age);
+
+    const { password, ...safeUser } = users[userIndex];
+    res.status(200).json({ success: true, message: 'User updated', data: safeUser });
+});
+
+// DELETE user (protected)
+app.delete('/api/users/:id', authenticateToken, (req, res) => {
+    const userIndex = users.findIndex(u => u.id === parseInt(req.params.id));
+    if (userIndex === -1) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const deletedUser = users.splice(userIndex, 1);
+    const { password, ...safeUser } = deletedUser[0];
+    res.status(200).json({ success: true, message: 'User deleted', data: safeUser });
+});
+
+// ============================================
+// ERROR HANDLING
+// ============================================
+app.use((req, res) => {
+    res.status(404).json({ success: false, message: 'Route not found' });
+});
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Server is running on http://localhost:${PORT}`);
-    console.log(`📋 Try these endpoints:`);
-    console.log(`   GET    http://localhost:${PORT}/api/users`);
-    console.log(`   POST   http://localhost:${PORT}/api/users`);
-    console.log(`   GET    http://localhost:${PORT}/api/users/1`);
-    console.log(`   PUT    http://localhost:${PORT}/api/users/1`);
-    console.log(`   DELETE http://localhost:${PORT}/api/users/1`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`🔐 Auth endpoints:`);
+    console.log(`   POST /api/auth/signup`);
+    console.log(`   POST /api/auth/login`);
+    console.log(`   GET  /api/auth/me (protected)`);
 });
