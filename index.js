@@ -10,7 +10,10 @@ const User = require('./models/User');
 connectDB();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:3001', 'https://your-vercel-app.vercel.app'],
+    credentials: true
+}));
 app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
