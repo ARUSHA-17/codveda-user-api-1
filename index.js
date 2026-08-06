@@ -3,6 +3,11 @@ const app = express();
 
 // Middleware to parse JSON data from requests
 app.use(express.json());
+// Add this line to serve static files (HTML, CSS, JS)
+app.use(express.static('public'));
+
+const cors = require('cors');
+app.use(cors());
 
 // ============================================
 // IN-MEMORY DATABASE (Array of users)

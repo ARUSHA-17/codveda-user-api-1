@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Management Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>👥 User Management Dashboard</h1>
+        <p class="subtitle">Connected to your Node.js REST API</p>
+
+        <!-- Add User Form -->
+        <div class="form-section">
+            <h2>Add New User</h2>
+            <form id="userForm">
+                <input type="text" id="name" placeholder="Enter name" required>
+                <input type="email" id="email" placeholder="Enter email" required>
+                <input type="number" id="age" placeholder="Enter age" required>
+                <button type="submit" class="btn-add">➕ Add User</button>
+            </form>
+        </div>
+
+        <!-- Users List -->
+        <div class="users-section">
+            <h2>All Users</h2>
+            <div id="loading">Loading users...</div>
+            <div id="usersList" class="users-grid"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
