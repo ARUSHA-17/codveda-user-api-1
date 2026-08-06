@@ -3,20 +3,16 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
+const connectDB = require('./config/db');
+const User = require('./models/User');
+
+// Connect to MongoDB
+connectDB();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ============================================
-// IN-MEMORY DATABASE
-// ============================================
-let users = [
-    { id: 1, name: 'Alice', email: 'alice@example.com', password: '$2a$10$abcdefghijklmnopqrstuv', age: 25 },
-    { id: 2, name: 'Bob', email: 'bob@example.com', password: '$2a$10$abcdefghijklmnopqrstuv', age: 30 }
-];
-
-// JWT Secret from .env
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
 // ============================================
@@ -24,7 +20,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 // ============================================
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
         return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
@@ -34,7 +30,7 @@ function authenticateToken(req, res, next) {
         if (err) {
             return res.status(403).json({ success: false, message: 'Invalid or expired token.' });
         }
-        req.user = decoded; // { userId, email }
+        req.user = decoded;
         next();
     });
 }
@@ -52,8 +48,8 @@ app.post('/api/auth/signup', async (req, res) => {
             return res.status(400).json({ success: false, message: 'All fields are required' });
         }
 
-        // Check if user already exists
-        const existingUser = users.find(u => u.email === email);
+        // Check if user exists
+        const existingUser = await User.findOne({ email });
         if (existingUser) {
             return res.status(400).json({ success: false, message: 'User already exists' });
         }
@@ -62,24 +58,21 @@ app.post('/api/auth/signup', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create user
-        const newUser = {
-            id: users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1,
+        const newUser = await User.create({
             name,
             email,
             password: hashedPassword,
             age: parseInt(age)
-        };
-
-        users.push(newUser);
+        });
 
         // Generate token
-        const token = jwt.sign({ userId: newUser.id, email: newUser.email }, JWT_SECRET, { expiresIn: '24h' });
+        const token = jwt.sign({ userId: newUser._id, email: newUser.email }, JWT_SECRET, { expiresIn: '24h' });
 
         res.status(201).json({
             success: true,
             message: 'User registered successfully',
             token,
-            user: { id: newUser.id, name: newUser.name, email: newUser.email, age: newUser.age }
+            user: { id: newUser._id, name: newUser.name, email: newUser.email, age: newUser.age }
         });
 
     } catch (error) {
@@ -97,7 +90,7 @@ app.post('/api/auth/login', async (req, res) => {
         }
 
         // Find user
-        const user = users.find(u => u.email === email);
+        const user = await User.findOne({ email });
         if (!user) {
             return res.status(401).json({ success: false, message: 'Invalid credentials' });
         }
@@ -109,13 +102,13 @@ app.post('/api/auth/login', async (req, res) => {
         }
 
         // Generate token
-        const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+        const token = jwt.sign({ userId: user._id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
 
         res.status(200).json({
             success: true,
             message: 'Login successful',
             token,
-            user: { id: user.id, name: user.name, email: user.email, age: user.age }
+            user: { id: user._id, name: user.name, email: user.email, age: user.age }
         });
 
     } catch (error) {
@@ -123,87 +116,96 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// GET all users (protected)
-app.get('/api/users', authenticateToken, (req, res) => {
-    res.json({ success: true, data: users });
-});
-
 // GET CURRENT USER (Protected)
-app.get('/api/auth/me', authenticateToken, (req, res) => {
-    const user = users.find(u => u.id === req.user.userId);
-    if (!user) {
-        return res.status(404).json({ success: false, message: 'User not found' });
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId).select('-password');
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+        res.json({ success: true, user });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
     }
-    res.json({
-        success: true,
-        user: { id: user.id, name: user.name, email: user.email, age: user.age }
-    });
 });
 
 // ============================================
 // USER CRUD ROUTES (Protected)
 // ============================================
 
-// CREATE user (protected)
-app.post('/api/users', authenticateToken, (req, res) => {
+// CREATE user
+app.post('/api/users', authenticateToken, async (req, res) => {
     try {
         const { name, email, age } = req.body;
         if (!name || !email || !age) {
             return res.status(400).json({ success: false, message: 'Please provide name, email, and age' });
         }
 
-        const newUser = {
-            id: users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1,
+        const newUser = await User.create({
             name,
             email,
-            password: '$2a$10$placeholder',
+            password: await bcrypt.hash('default123', 10), // default password for users created via dashboard
             age: parseInt(age)
-        };
+        });
 
-        users.push(newUser);
-        res.status(201).json({ success: true, message: 'User created', data: newUser });
+        res.status(201).json({
+            success: true,
+            message: 'User created',
+            data: { id: newUser._id, name: newUser.name, email: newUser.email, age: newUser.age }
+        });
 
     } catch (error) {
         res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 });
 
-// GET all users (protected)
-app.get('/api/users', authenticateToken, (req, res) => {
-    const safeUsers = users.map(({ password, ...u }) => u);
-    res.status(200).json({ success: true, count: safeUsers.length, data: safeUsers });
+// GET all users
+app.get('/api/users', authenticateToken, async (req, res) => {
+    try {
+        const users = await User.find().select('-password');
+        res.status(200).json({ success: true, count: users.length, data: users });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
-// GET single user (protected)
-app.get('/api/users/:id', authenticateToken, (req, res) => {
-    const user = users.find(u => u.id === parseInt(req.params.id));
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    const { password, ...safeUser } = user;
-    res.status(200).json({ success: true, data: safeUser });
+// GET single user
+app.get('/api/users/:id', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id).select('-password');
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        res.status(200).json({ success: true, data: user });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
-// UPDATE user (protected)
-app.put('/api/users/:id', authenticateToken, (req, res) => {
-    const userIndex = users.findIndex(u => u.id === parseInt(req.params.id));
-    if (userIndex === -1) return res.status(404).json({ success: false, message: 'User not found' });
+// UPDATE user
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
+    try {
+        const { name, email, age } = req.body;
+        const user = await User.findByIdAndUpdate(
+            req.params.id,
+            { name, email, age: parseInt(age) },
+            { new: true, runValidators: true }
+        ).select('-password');
 
-    const { name, email, age } = req.body;
-    if (name) users[userIndex].name = name;
-    if (email) users[userIndex].email = email;
-    if (age) users[userIndex].age = parseInt(age);
-
-    const { password, ...safeUser } = users[userIndex];
-    res.status(200).json({ success: true, message: 'User updated', data: safeUser });
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        res.status(200).json({ success: true, message: 'User updated', data: user });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
-// DELETE user (protected)
-app.delete('/api/users/:id', authenticateToken, (req, res) => {
-    const userIndex = users.findIndex(u => u.id === parseInt(req.params.id));
-    if (userIndex === -1) return res.status(404).json({ success: false, message: 'User not found' });
-
-    const deletedUser = users.splice(userIndex, 1);
-    const { password, ...safeUser } = deletedUser[0];
-    res.status(200).json({ success: true, message: 'User deleted', data: safeUser });
+// DELETE user
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findByIdAndDelete(req.params.id).select('-password');
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        res.status(200).json({ success: true, message: 'User deleted', data: user });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
 // ============================================
@@ -216,8 +218,5 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`🔐 Auth endpoints:`);
-    console.log(`   POST /api/auth/signup`);
-    console.log(`   POST /api/auth/login`);
-    console.log(`   GET  /api/auth/me (protected)`);
+    console.log(`🗄️  Connected to MongoDB`);
 });
