@@ -1,5 +1,5 @@
 // API Base URL
-const API_URL = 'http://localhost:3000/api/users';
+const API_URL = 'https://your-app.up.railway.app/api/users';
 
 // DOM Elements
 const userForm = document.getElementById('userForm');
